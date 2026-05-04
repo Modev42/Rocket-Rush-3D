@@ -7,13 +7,14 @@ public class RocketController : MonoBehaviour
     [Header("Hız")]
     public float forwardSpeed = 15f;
     public float maxSpeed = 30f;
-    public float speedIncreaseRate = 0.3f;   // Checkpoint başına
+    public float speedIncreaseRate = 0.3f;   
     public float horizontalSpeed = 22f;
     public float maxHorizontalPosition = 2.5f;
     public float gravityForce = 15f;
 
-    [Header("Dokunmatik")]
+    [Header("Dokunmatik & Klavye")]
     [Range(0.5f, 4f)] public float dragSensitivity = 2f;
+    public bool enableKeyboardInEditor = true; // Editor'da klavye aç/kapat
 
     [Header("Materyaller")]
     public Material redMaterial, blueMaterial, yellowMaterial;
@@ -23,7 +24,7 @@ public class RocketController : MonoBehaviour
     [Range(0f, 1f)] public float sfxVolume = 0.9f;
 
     [Header("VFX")]
-    public ParticleSystem thruster; // Rocket'in child Particle System'i
+    public ParticleSystem thruster; 
 
     // internal
     CharacterController controller;
@@ -31,7 +32,7 @@ public class RocketController : MonoBehaviour
     AudioSource audioSrc;
 
     float initialSpeed;
-    float savedForwardSpeed;   // Öldüğün andaki hız (continue için)
+    float savedForwardSpeed;   
 
     float targetX = 0f;
     bool isGameStarted, isCountingDown;
@@ -45,7 +46,7 @@ public class RocketController : MonoBehaviour
     float dragStartX;
     float rocketStartX;
 
-    // child transform backup (restart kayması fix)
+    // child transform backup
     Transform[] childs;
     Vector3[] initLocalPos;
     Quaternion[] initLocalRot;
@@ -65,7 +66,6 @@ public class RocketController : MonoBehaviour
         initialSpeed = forwardSpeed;
         savedForwardSpeed = forwardSpeed;
 
-        // child'ları kaydet
         childs = GetComponentsInChildren<Transform>(true);
         initLocalPos   = new Vector3[childs.Length];
         initLocalRot   = new Quaternion[childs.Length];
@@ -78,10 +78,9 @@ public class RocketController : MonoBehaviour
         }
 
         ApplySavedSensitivity();
-
-        ChangeColor(Random.Range(0, 3)); // roket + alev rengi
+        ChangeColor(Random.Range(0, 3)); 
         UpdateThrusterBySpeed();
-        SetThrusterActive(false);        // countdown'a kadar kapalı
+        SetThrusterActive(false);        
 
         StartCoroutine(DelayedStart());
     }
@@ -90,23 +89,11 @@ public class RocketController : MonoBehaviour
 
     void ApplySavedSensitivity()
     {
-        float raw;
-
-        if (PlayerPrefs.HasKey("SensitivityValue"))
-            raw = PlayerPrefs.GetFloat("SensitivityValue", 50f); // 0-100 slider
-        else
-            raw = 50f;
-
-        // 0–100 → 0–1
+        float raw = PlayerPrefs.GetFloat("SensitivityValue", 50f);
         float t = Mathf.InverseLerp(0f, 100f, raw);
-
-        // Eğri verelim, düşükte daha yavaş artsın, sonda fırlasın
-        float curved = Mathf.Pow(t, 1.4f); // 1.0 yerine 1.4 = daha hissedilir
-
-        // Aralığı büyüttük: çok yavaştan çok hızlıya
-        float minSpeed = 6f;   // en düşük hassasiyet
-        float maxSpeed = 38f;  // en yüksek hassasiyet
-
+        float curved = Mathf.Pow(t, 1.4f); 
+        float minSpeed = 6f;   
+        float maxSpeed = 38f;  
         horizontalSpeed = Mathf.Lerp(minSpeed, maxSpeed, curved);
     }
 
@@ -121,14 +108,27 @@ public class RocketController : MonoBehaviour
     {
         if (isCountingDown || !isGameStarted) return;
 
-        HandleTouchInput();
+        HandleInput(); // Hem dokunmatik hem klavye burada
         MoveRocket();
         UpdateThrusterBySpeed();
     }
 
-    // === Input (dokunmatik) ===
-    void HandleTouchInput()
+    // === Input (Dokunmatik + Klavye) ===
+    void HandleInput()
     {
+        // 1. KLAVYE DESTEĞİ (Unity Editor Kaydı ve Test için)
+        #if UNITY_EDITOR || UNITY_STANDALONE
+        float hInput = Input.GetAxis("Horizontal");
+        if (hInput != 0)
+        {
+            targetX += hInput * horizontalSpeed * Time.deltaTime;
+            targetX = Mathf.Clamp(targetX, -maxHorizontalPosition, maxHorizontalPosition);
+            // Klavye kullanılıyorsa dokunmatik kısmına bakma (çakışmayı önler)
+            return; 
+        }
+        #endif
+
+        // 2. DOKUNMATİK DESTEĞİ (Mobil için)
         if (Input.touchCount == 0) { activeFingerId = -1; return; }
 
         int idx = -1;
@@ -164,7 +164,7 @@ public class RocketController : MonoBehaviour
         Vector3 fwd = Vector3.forward * forwardSpeed * Time.deltaTime;
 
         float currentX = transform.position.x;
-        float newX = Mathf.Lerp(currentX, targetX, horizontalSpeed * Time.deltaTime);
+        float newX = Mathf.Lerp(currentX, targetX, horizontalSpeed * 0.8f * Time.deltaTime); // Klavye ile daha smooth geçiş için 0.8f ekledim
         Vector3 hor = new Vector3(newX - currentX, 0, 0);
 
         verticalVelocity -= gravityForce * Time.deltaTime;
@@ -179,14 +179,12 @@ public class RocketController : MonoBehaviour
         }
     }
 
-    // === Hız artışı (checkpoint) ===
     public void IncreaseSpeedByCheckpoint()
     {
         if (forwardSpeed >= maxSpeed) return;
         forwardSpeed = Mathf.Min(maxSpeed, forwardSpeed + speedIncreaseRate);
     }
 
-    // === Renk ve çarpışmalar ===
     public void ChangeColor(int i)
     {
         currentColor = (RocketColor)i;
@@ -219,18 +217,12 @@ public class RocketController : MonoBehaviour
 
         if (other.CompareTag("GapTrigger"))
         {
-         // Çifte tetiklemeyi engelle
             var col = other.GetComponent<Collider>();
             if (col) col.enabled = false;
-
             GameManager.instance?.AddDodgeScore();
-
-            // Yüksek hızda ıskalamayı engellemek için küçük gecikme
             Destroy(other.gameObject, 0.05f);
-
             return;
         }
-
 
         GameObject root = other.attachedRigidbody ? other.attachedRigidbody.gameObject : other.transform.root.gameObject;
 
@@ -243,62 +235,45 @@ public class RocketController : MonoBehaviour
         HitBall(hitColor, root);
     }
 
-  void HitBall(int ballColor, GameObject root)
+    void HitBall(int ballColor, GameObject root)
     {
-     foreach (var c in root.GetComponentsInChildren<Collider>(true))
-        c.enabled = false;
+        foreach (var c in root.GetComponentsInChildren<Collider>(true))
+            c.enabled = false;
 
-     if (ballColor == (int)currentColor)
-     {
-          // DOĞRU TOP: yalnızca o topu sil
+        if (ballColor == (int)currentColor)
+        {
             GameManager.instance?.AddCorrectBallScore();
-           PlayOneShotSafe(collectGoodSfx, sfxVolume);
-           Destroy(root);
-     }
+            PlayOneShotSafe(collectGoodSfx, sfxVolume);
+            Destroy(root);
+        }
         else
         {
-         // YANLIŞ TOP: etrafındaki tüm topları da temizle
-         ClearNearbyBalls(root.transform.position, 8f); // yarıçapı istersen değiştir
-
-         PlayOneShotSafe(collectBadSfx, sfxVolume);
-         GameOver();
-           return;
+            ClearNearbyBalls(root.transform.position, 8f);
+            PlayOneShotSafe(collectBadSfx, sfxVolume);
+            GameOver();
         }
     }
 
-
-
-    // === Oyun durumları ===
     public void GameOver()
     {
-        // öldüğün andaki hızı kaydet
         savedForwardSpeed = forwardSpeed;
-
         isGameStarted = false;
         isCountingDown = false;
         targetX = 0f;
         forwardSpeed = 0f;
         SetThrusterActive(false);
         PlayOneShotSafe(gameOverSfx, sfxVolume);
-
         GameManager.instance?.GameOver();
         UIManager.instance?.ShowGameOver(0);
-
-        // DEVAM edeceksek topları hemen silmiyoruz
-        // DestroyAllBalls();
     }
 
-    // Sadece roketi canlandırıp aynı road'dan devam
     public void ContinueGame()
     {
-        // öldüğün hızdan devam et
         forwardSpeed = savedForwardSpeed;
-
         SetThrusterActive(false);
         StartCountdown();
     }
 
-    // Reklam sonrası checkpoint başlangıcı
     public void RestartAtCheckpoint()
     {
         if (GameManager.instance)
@@ -312,25 +287,17 @@ public class RocketController : MonoBehaviour
         StartCountdown();
     }
 
-    // Tam reset: en başa
     public void ResetToStart()
     {
         controller.enabled = false;
-
         transform.position = startPosition;
         transform.rotation = startRotation;
-
         RestoreChildLocals();
-
         controller.enabled = true;
-
         verticalVelocity = 0f;
         targetX = 0f;
         forwardSpeed = initialSpeed;
-
-        // gerçek restart: topları burada sil
         DestroyAllBalls();
-
         SetThrusterActive(false);
         StartCountdown();
     }
@@ -362,7 +329,6 @@ public class RocketController : MonoBehaviour
         SetThrusterActive(true);
     }
 
-    // === Helpers ===
     void RestoreChildLocals()
     {
         for (int i = 1; i < childs.Length; i++)
@@ -381,73 +347,47 @@ public class RocketController : MonoBehaviour
     }
 
     void ClearNearbyBalls(Vector3 center, float radius)
-{
-    float r2 = radius * radius;
-
-    void ClearTag(string tag)
     {
-        var objs = GameObject.FindGameObjectsWithTag(tag);
-        foreach (var go in objs)
+        float r2 = radius * radius;
+        void ClearTag(string tag)
         {
-            Vector3 diff = go.transform.position - center;
-            if (diff.sqrMagnitude <= r2)
+            var objs = GameObject.FindGameObjectsWithTag(tag);
+            foreach (var go in objs)
             {
-                Destroy(go);
+                Vector3 diff = go.transform.position - center;
+                if (diff.sqrMagnitude <= r2) Destroy(go);
             }
         }
+        ClearTag("RedBall");
+        ClearTag("BlueBall");
+        ClearTag("YellowBall");
     }
-
-    ClearTag("RedBall");
-    ClearTag("BlueBall");
-    ClearTag("YellowBall");
-}
-
 
     void SetThrusterActive(bool on)
     {
         if (!thruster) return;
         var em = thruster.emission;
         em.enabled = on;
-        if (on)
-        {
-            thruster.Clear(true);
-            thruster.Play(true);
-        }
-        else
-        {
-            thruster.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-        }
+        if (on) { thruster.Clear(true); thruster.Play(true); }
+        else { thruster.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear); }
     }
 
     void ApplyThrusterColor(RocketColor color)
     {
         if (!thruster) return;
-
-        Color core = color switch
-        {
+        Color core = color switch {
             RocketColor.Red    => new Color(1f, 0.48f, 0.35f),
             RocketColor.Blue   => new Color(0.55f, 0.95f, 1f),
             RocketColor.Yellow => new Color(1f, 0.92f, 0.45f),
             _ => Color.white
         };
         Color tip = Color.Lerp(core, Color.white, 0.2f);
-
         var col = thruster.colorOverLifetime;
         col.enabled = true;
         var g = new Gradient();
         g.SetKeys(
-            new[]
-            {
-                new GradientColorKey(core, 0f),
-                new GradientColorKey(tip, 1f)
-            },
-            new[]
-            {
-                new GradientAlphaKey(0f,   0f),
-                new GradientAlphaKey(1f,   0.1f),
-                new GradientAlphaKey(0.6f, 0.7f),
-                new GradientAlphaKey(0f,   1f)
-            }
+            new[] { new GradientColorKey(core, 0f), new GradientColorKey(tip, 1f) },
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.1f), new GradientAlphaKey(0.6f, 0.7f), new GradientAlphaKey(0f, 1f) }
         );
         col.color = new ParticleSystem.MinMaxGradient(g);
     }
@@ -456,10 +396,8 @@ public class RocketController : MonoBehaviour
     {
         if (!thruster) return;
         float t = Mathf.InverseLerp(0f, maxSpeed, forwardSpeed);
-
         var main = thruster.main;
         main.startSize = Mathf.Lerp(0.35f, 0.6f, t);
-
         var em = thruster.emission;
         em.rateOverTime = Mathf.Lerp(40f, 90f, t);
     }
@@ -470,9 +408,5 @@ public class RocketController : MonoBehaviour
         audioSrc.PlayOneShot(clip, Mathf.Clamp01(vol));
     }
 
-    // === BallSpawner için hız getter ===
-    public float GetCurrentSpeed()
-    {
-        return forwardSpeed;
-    }
+    public float GetCurrentSpeed() => forwardSpeed;
 }
